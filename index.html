@@ -1,0 +1,117 @@
+<!doctype html><html lang="it"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow"><title>Edas &mdash; Vendite</title>
+<style>body{margin:0;font-family:system-ui,sans-serif;background:#1A3557;color:#fff;display:flex;align-items:center;justify-content:center;min-height:100vh}
+form{background:#fff;color:#1A3557;padding:28px 26px;border-radius:12px;width:min(88vw,340px);box-sizing:border-box;box-shadow:0 8px 30px #0006}
+h1{font-size:20px;margin:0 0 14px}input,button{font-size:17px;width:100%;box-sizing:border-box;padding:11px;margin:6px 0;border-radius:8px;border:1px solid #9ab}
+button{background:#1A3557;color:#fff;border:0;font-weight:bold}p{color:#C62828;min-height:1.2em;margin:4px 0 0;font-size:14px}
+#st{color:#1A3557;font-size:13px;margin:10px 0 4px;min-height:1.2em}#bar{height:8px;background:#E3E8EF;border-radius:4px;overflow:hidden}
+#bar i{display:block;height:100%;width:0;background:#2E7D32;transition:width .2s}#rip{display:none;background:#C62828}#ok:disabled{opacity:.6}</style></head>
+<body><form id="f"><h1>Edas &mdash; Vendite</h1><input id="p" type="password" placeholder="Password" autocomplete="current-password">
+<button id="ok">Entra</button><div id="st">Scarico la dashboard...</div><div id="bar"><i id="pr"></i></div>
+<button type="button" id="rip">Riprova</button><p id="e"></p></form>
+<script>
+(function(){
+var VER='20261114191847',TOT=2926874,FILE='dati.bin',TOT2=17525886,FILE2='extra.bin';
+var $=function(x){return document.getElementById(x)};
+function mb(n){return (n/1048576).toFixed(1).replace('.',',')}
+function stato(t){var e=$('st');if(e)e.textContent=t}
+function barra(n){var e=$('pr');if(e)e.style.width=Math.min(100,Math.round(100*n/TOT))+'%'}
+// i file cifrati: dalla memoria del telefono se sono dello stesso giro, se no dal sito (riprende se la linea cade)
+async function dallaCache(file){try{if(!window.caches)return null;var c=await caches.open('edas-dashboard');var r=await c.match('./'+file+'?v='+VER);
+ return r?new Uint8Array(await r.arrayBuffer()):null}catch(e){return null}}
+async function inCache(file,a){try{if(!window.caches)return;var c=await caches.open('edas-dashboard');
+ var ks=await c.keys();for(var i=0;i<ks.length;i++)if(ks[i].url.indexOf('/'+file+'?')>=0&&ks[i].url.indexOf('v='+VER)<0)await c.delete(ks[i]);
+ await c.put('./'+file+'?v='+VER,new Response(a,{headers:{'Content-Type':'application/octet-stream'}}))}catch(e){}}
+async function scarica(file,tot,prog,linea){
+ var parti=[],preso=0,tent=0;
+ while(true){
+  try{
+   var h={};if(preso)h.Range='bytes='+preso+'-';
+   var r=await fetch(file+'?v='+VER,{headers:h,cache:'no-store'});
+   if(preso&&r.status===200){parti=[];preso=0}
+   else if(!r.ok)throw new Error('HTTP '+r.status);
+   var rd=r.body.getReader();
+   while(true){var x=await rd.read();if(x.done)break;parti.push(x.value);preso+=x.value.length;prog(preso)}
+   if(preso<tot)throw new Error('incompleto');
+   break;
+  }catch(e){
+   tent++;if(tent>8)throw e;
+   linea(preso,tent);
+   await new Promise(function(z){setTimeout(z,Math.min(8000,1000*Math.pow(2,tent-1)))});
+  }
+ }
+ var a=new Uint8Array(preso),o=0;for(var i=0;i<parti.length;i++){a.set(parti[i],o);o+=parti[i].length}
+ return a;
+}
+var ATTESA={};
+function prendi(file,tot,prog,linea,giaQui){
+ if(!ATTESA[file])ATTESA[file]=(async function(){
+  var a=await dallaCache(file);
+  if(a&&a.length===tot){prog(tot);if(giaQui)giaQui();return a}
+  a=await scarica(file,tot,prog,linea);inCache(file,a);return a})();
+ return ATTESA[file];
+}
+function prendiDati(){return prendi(FILE,TOT,function(n){barra(n);stato('Scarico la dashboard: '+mb(n)+' di '+mb(TOT)+' MB')},
+ function(n,t){stato('Linea persa, riprendo da '+mb(n)+' MB ('+t+')...')},function(){stato('Dashboard gia\' sul telefono')})}
+async function apriFile(a,pw){
+ var T=new TextDecoder().decode(a.subarray(0,5));if(T!=='EDAS1')throw new Error('file');
+ var k0=await crypto.subtle.importKey('raw',new TextEncoder().encode(pw),'PBKDF2',false,['deriveKey']);
+ var k=await crypto.subtle.deriveKey({name:'PBKDF2',salt:a.subarray(5,21),iterations:250000,hash:'SHA-256'},k0,{name:'AES-GCM',length:256},false,['decrypt']);
+ var pt;
+ try{pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:a.subarray(21,33)},k,a.subarray(33))}catch(e){throw new Error('password')}
+ return await new Response(new Blob([pt]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+}
+// foto, Collezione e PDF dei trasferimenti: scendono dopo, con la dashboard gia' aperta
+async function dopo(pw){
+ if(!TOT2)return;
+ var bd=document.createElement('div');
+ bd.style.cssText='position:fixed;right:8px;bottom:8px;z-index:99998;background:#1A3557;color:#fff;padding:5px 9px;border-radius:8px;font:12px/1.3 system-ui,sans-serif;opacity:.9;pointer-events:none';
+ bd.textContent='Foto, Collezione, PDF e turni in arrivo...';document.body.appendChild(bd);
+ try{
+  var a=await prendi(FILE2,TOT2,function(n){bd.textContent='Foto, Collezione e PDF: '+mb(n)+' di '+mb(TOT2)+' MB'},
+   function(n,t){bd.textContent='Linea persa, riprendo foto e Collezione ('+t+')...'});
+  var X=JSON.parse(await apriFile(a,pw));
+  for(var id in X){var e=document.getElementById(id);if(e){e.textContent=X[id];e.removeAttribute('data-dopo')}}
+  window.dispatchEvent(new Event('edas-arrivati'));
+  bd.textContent='Foto, Collezione e PDF arrivati';setTimeout(function(){bd.remove()},2500);
+ }catch(e){bd.textContent='Foto e Collezione non arrivate: riapri la pagina per riprovare';setTimeout(function(){bd.remove()},8000)}
+}
+// (David 09/11 11:00, telefono: la pagina usciva impaginata come sul computer) dopo la scrittura si rimette il viewport
+function rimettiVista(){try{var m=document.querySelector('meta[name=viewport]');if(!m){m=document.createElement('meta');m.name='viewport';document.head.appendChild(m)}
+ var c='width=device-width, initial-scale=1, viewport-fit=cover';m.setAttribute('content',c+', shrink-to-fit=no');setTimeout(function(){m.setAttribute('content',c)},80)}catch(e){}}
+async function apri(pw){
+ if(typeof DecompressionStream==='undefined')throw new Error('vecchio');
+ var a=await prendiDati();
+ stato('Apro la dashboard...');
+ var t=await apriFile(a,pw);
+ try{localStorage.setItem('edas_pw',pw)}catch(e){}
+ if(window.__edasScritta)return; window.__edasScritta=true;
+ document.open();document.write(t);document.close();
+ rimettiVista();setTimeout(rimettiVista,500);
+ dopo(pw);
+}
+// UNA SOLA APERTURA (David 09/11 09:04, riquadro rosso "Can't create duplicate variable: 'TRPDF'"): con la password ricordata
+// la pagina parte da sola; se mentre scarica si tocca anche Entra, la dashboard veniva scritta due volte nella stessa
+// finestra e i suoi script andavano in errore. Ora il secondo tocco non fa niente e il bottone resta spento finche' apre.
+var APRO=null;
+function parti(pw){
+ if(APRO)return APRO;
+ var b=$('ok');b.disabled=true;b.textContent='Apro...';$('e').textContent='';
+ APRO=apri(pw).catch(function(e){APRO=null;b.disabled=false;b.textContent='Entra';errore(e)});
+ return APRO;
+}
+function errore(e){
+ var m=String(e&&e.message||e);
+ if(m==='password'){$('e').textContent='Password sbagliata';try{localStorage.removeItem('edas_pw')}catch(x){}}
+ else if(m==='vecchio'){$('e').textContent='Questo browser e\' troppo vecchio: aggiorna Safari (iOS 16.4 o piu\' nuovo)'}
+ else{$('e').textContent='Non riesco a scaricare la dashboard: controlla la linea e tocca Riprova';$('rip').style.display='block';ATTESA={}}
+}
+$('f').onsubmit=function(ev){ev.preventDefault();parti($('p').value)};
+$('rip').onclick=function(){$('rip').style.display='none';$('e').textContent='';
+ var m=null;try{m=localStorage.getItem('edas_pw')}catch(x){}
+ if(m)parti(m);else prendiDati().catch(errore)};
+var m=null;try{m=localStorage.getItem('edas_pw')}catch(e){}
+if(m){$('p').value=m;parti(m)}else{$('p').focus();prendiDati().catch(errore)}
+})();
+</script></body></html>
